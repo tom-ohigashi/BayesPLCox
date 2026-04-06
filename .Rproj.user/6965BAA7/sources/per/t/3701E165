@@ -1,0 +1,26 @@
+{
+    "id": "3701E165",
+    "path": "C:/Users/Ohigashi/Dropbox/Rpackage/BayesPLCox/R/gplcox_fit.R",
+    "project_path": "R/gplcox_fit.R",
+    "type": "r_source",
+    "hash": "1315828826",
+    "contents": "",
+    "dirty": false,
+    "created": 1773897072764.0,
+    "source_on_save": false,
+    "relative_order": 3,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "43,30",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1773913633,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1773913633193,
+    "read_only": false,
+    "read_only_alternatives": []
+}
