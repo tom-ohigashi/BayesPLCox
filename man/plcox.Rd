@@ -7,7 +7,7 @@
 plcox(
   formula,
   data,
-  delta = 1,
+  delta = 10,
   prior_mean = NULL,
   prior_var = 100,
   a_sig = 0.01,

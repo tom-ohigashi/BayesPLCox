@@ -17,7 +17,7 @@
 #'
 #' @keywords internal
 plcox_fixed_fit <- function(formula, data,
-                            delta = 1.0,
+                            delta = 10.0,
                             prior_mean = NULL, prior_var = 100,
                             n_iter = 2000, burn = 1000, thin = 1,
                             standardize = FALSE,
@@ -132,7 +132,7 @@ plcox_fixed_fit <- function(formula, data,
 #'
 #' @keywords internal
 plcox_frailty_fit <- function(formula, data,
-                              delta = 1.0,
+                              delta = 10.0,
                               prior_mean = NULL, prior_var = 100,
                               a_sig = 0.01, b_sig = 0.01,
                               n_iter = 2000, burn = 1000, thin = 1,
@@ -330,7 +330,7 @@ plcox_frailty_fit <- function(formula, data,
 #'
 #' @export
 plcox <- function(formula, data,
-                  delta = 1.0,
+                  delta = 10.0,
                   prior_mean = NULL, prior_var = 100,
                   a_sig = 0.01, b_sig = 0.01,
                   n_iter = 2000, burn = 1000, thin = 1,

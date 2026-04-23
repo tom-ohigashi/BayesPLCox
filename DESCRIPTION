@@ -1,6 +1,6 @@
 Package: BayesPLCox
 Title: Bayesian Inference for Cox Models via PL and GPL Likelihoods
-Version: 0.0.1
+Version: 0.0.2
 Authors@R: c(
     person(
       "Tomohiro", "Ohigashi",

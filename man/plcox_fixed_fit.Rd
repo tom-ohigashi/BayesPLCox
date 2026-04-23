@@ -7,7 +7,7 @@
 plcox_fixed_fit(
   formula,
   data,
-  delta = 1,
+  delta = 10,
   prior_mean = NULL,
   prior_var = 100,
   n_iter = 2000,
