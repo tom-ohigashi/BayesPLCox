@@ -4,19 +4,47 @@
 \alias{traceplot.gplcox}
 \title{Trace plots for a fitted GPL-Cox model}
 \usage{
-\method{traceplot}{gplcox}(x, intercept = FALSE, ...)
+\method{traceplot}{gplcox}(
+  x,
+  intercept = FALSE,
+  pars = NULL,
+  include_frailty_var = FALSE,
+  frailty = NULL,
+  ncol = 1L,
+  ...
+)
 }
 \arguments{
 \item{x}{An object of class \code{"gplcox"}.}
 
-\item{intercept}{Logical; include the intercept in the trace plot?}
+\item{intercept}{Logical; include the intercept in the trace plot when
+\code{pars = NULL}?}
 
-\item{...}{Further arguments, currently ignored.}
+\item{pars}{Regression coefficients to plot. Can be \code{NULL},
+numeric indices, or character parameter names. If \code{NULL},
+all regression coefficients are plotted, subject to
+\code{intercept}.}
+
+\item{include_frailty_var}{Logical; include the frailty variance
+parameter when a frailty model is fitted?}
+
+\item{frailty}{Optional individual frailty effects to plot. Can be
+\code{NULL}, numeric indices, or character names.}
+
+\item{ncol}{Number of columns used for parameter facets.}
+
+\item{...}{Further arguments reserved for future use.}
 }
 \value{
-A plot object.
+A \code{ggplot2} object or, when multiple plot components are
+produced, a \code{patchwork} object.
 }
 \description{
-Produces trace plots of posterior draws for regression coefficients and, when
-present, frailty variance parameters.
+Produces chain-specific trace plots of posterior draws for regression
+coefficients and, when present, frailty variance parameters and selected
+individual frailty effects.
+}
+\details{
+For models fitted with multiple MCMC chains, each chain is displayed
+separately in the trace plot.
 }

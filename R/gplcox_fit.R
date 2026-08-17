@@ -18,7 +18,8 @@
 gplcox_fixed_fit <- function(formula, data,
                              prior_mean = NULL, prior_var = 100,
                              n_iter = 4000, burn = 2000, thin = 1,
-                             standardize = FALSE,
+                             standardize = TRUE,
+                             init = NULL,
                              verbose = FALSE) {
 
   mf <- model.frame(formula, data = data)
@@ -26,20 +27,13 @@ gplcox_fixed_fit <- function(formula, data,
   if (!inherits(Y, "Surv")) stop("The response variable must be a Surv(time, status) object.")
   X <- model.matrix(formula, data = mf)
 
-  # --- Standardization (excluding intercept) ---
-  if (standardize) {
-    Xc <- X
-    if (colnames(Xc)[1] %in% c("(Intercept)", "(Intercept)")) {
-      j0 <- 2:ncol(Xc)
-    } else {
-      j0 <- 1:ncol(Xc)
-    }
-    mu <- colMeans(Xc[, j0, drop=FALSE])
-    sd <- apply(Xc[, j0, drop=FALSE], 2, sd)
-    sd[sd == 0] <- 1
-    Xc[, j0] <- scale(Xc[, j0, drop=FALSE], center = mu, scale = sd)
-    X <- Xc
-  }
+  std_info <- standardize_design(
+    X = X,
+    standardize = standardize
+  )
+
+  X <- std_info$X
+  has_intercept <- std_info$has_intercept
 
   dat   <- build_gpl_from_surv(Y[,1], Y[,2], X)
   X     <- dat$X
@@ -51,24 +45,49 @@ gplcox_fixed_fit <- function(formula, data,
   if (is.null(prior_mean)) b0 <- rep(0, p)
   V0_inv <- as.matrix(Matrix::Diagonal(x = rep(1 / prior_var, p)))
 
-  beta  <- rep(0, p)
-  eta   <- as.numeric(X %*% beta)
-  theta <- plogis(eta)
+  # --- Initialization
+  init <- validate_init(
+    init = init,
+    p = p,
+    has_frailty = FALSE
+  )
 
-  # Initialize Z, zeta, and kappa
-  Z     <- sample_Z_geom(theta, Rsets)
-  zeta  <- accumulate_zeta_i(Z, Rsets, n)
-  kappa <- d - 0.5 * zeta
+  # Was beta supplied by the user?
+  beta_supplied <- !is.null(init) && !is.null(init$beta)
 
-  omega <- numeric(n)
-  idx   <- zeta > 0
-  if (any(idx)) {
-    omega[idx] <- BayesLogit::rpg(sum(idx), h = as.numeric(zeta[idx]), z = as.numeric(eta[idx]))
-    # --- Robustness: Set NA/Inf from PG to 0 ---
-    bad <- !is.finite(omega[idx])
-    if (any(bad)) omega[idx][bad] <- 0
+  # Initial beta on the original covariate scale
+  if (beta_supplied) {
+    beta_init_original <- as.numeric(init$beta)
+  } else {
+    beta_init_original <- rep(0, p)
   }
 
+  names(beta_init_original) <- colnames(X)
+
+  # Transform to the internal scale used by MCMC
+  beta_init_internal <- transform_initial_beta(
+    beta = beta_init_original,
+    standardization = std_info
+  )
+
+  names(beta_init_internal) <- colnames(X)
+
+  # Start the MCMC chain
+  beta <- beta_init_internal
+
+  initial_values <- list(
+    original = list(
+      beta = beta_init_original
+    ),
+    internal = list(
+      beta = beta_init_internal
+    ),
+    supplied = list(
+      beta = beta_supplied
+    )
+  )
+
+  # --- Storage
   n_save <- floor((n_iter - burn)/thin)
   beta_draws <- matrix(NA_real_, n_save, p)
   colnames(beta_draws) <- colnames(X)
@@ -85,7 +104,8 @@ gplcox_fixed_fit <- function(formula, data,
     kappa[!is.finite(kappa)] <- 0
 
     # -- omega | beta, Z (Polya-Gamma; skip if h=0)
-    omega[] <- 0
+    # omega[] <- 0
+    omega <- numeric(n)
     idx <- zeta > 0
     if (any(idx)) {
       pg <- BayesLogit::rpg(sum(idx), h = as.numeric(zeta[idx]), z = as.numeric(eta[idx]))
@@ -118,13 +138,10 @@ gplcox_fixed_fit <- function(formula, data,
     }
   }
 
-  if (standardize) {
-    for (j in 2:ncol(X)) {
-      beta_draws[, j] <- beta_draws[, j] / sd[j-1]
-    }
-    intercept_adjustment <- rowSums(sweep(beta_draws[, -1, drop=FALSE], 2, mu, "*"))
-    beta_draws[, 1] <- beta_draws[, 1] - intercept_adjustment
-  }
+  beta_draws <- backtransform_beta(
+    beta_draws = beta_draws,
+    standardization = std_info
+  )
 
   return(list(
     beta         = beta_draws,
@@ -139,7 +156,8 @@ gplcox_fixed_fit <- function(formula, data,
     R_sets       = dat$R_sets,
     E_sets       = dat$E_sets,
     d_obs        = sapply(dat$E_sets, length),
-    group_id_ord = NULL
+    group_id_ord = NULL,
+    initial_values = initial_values
   ))
 }
 
@@ -157,7 +175,8 @@ gplcox_frailty_fit <- function(formula, data,
                                prior_mean = NULL, prior_var = 100,
                                a_sig = 0.01, b_sig = 0.01,
                                n_iter = 4000, burn = 2000, thin = 1,
-                               standardize = FALSE,
+                               standardize = TRUE,
+                               init = NULL,
                                verbose = FALSE) {
 
   # --- 1. Parse Formula and Extract Data ---
@@ -170,27 +189,21 @@ gplcox_frailty_fit <- function(formula, data,
   if (!inherits(Y, "Surv")) stop("The response variable must be a Surv(time, status) object.")
   X  <- model.matrix(fixed_formula, data)
 
-  # --- Standardization (excluding intercept) ---
-  if (standardize) {
-    Xc <- X
-    if (colnames(Xc)[1] %in% c("(Intercept)", "(Intercept)")) {
-      j0 <- 2:ncol(Xc)
-    } else {
-      j0 <- 1:ncol(Xc)
-    }
-    mu <- colMeans(Xc[, j0, drop=FALSE])
-    sd <- apply(Xc[, j0, drop=FALSE], 2, sd)
-    sd[sd == 0] <- 1
-    Xc[, j0] <- scale(Xc[, j0, drop=FALSE], center = mu, scale = sd)
-    X <- Xc
-  }
+  std_info <- standardize_design(
+    X = X,
+    standardize = standardize
+  )
+
+  X <- std_info$X
+  has_intercept <- std_info$has_intercept
 
   # Extract Grouping Factor
   group_var <- as.character(fb[[1]][[3]])
   group_factor <- as.factor(data[[group_var]])
+  group_levels <- levels(group_factor)
   group_id <- as.integer(group_factor)
-  n_groups <- max(group_id)
-  group_list <- split(1:nrow(data), group_id)
+  n_groups <- length(group_levels)
+  group_list <- split(seq_len(nrow(data)), group_id)
 
   # Build GPL Risk Set Data
   dat <- build_gpl_from_surv(Y[,1], Y[,2], X)
@@ -201,20 +214,85 @@ gplcox_frailty_fit <- function(formula, data,
   group_id_ord <- group_id[dat$ord]
   group_list_ord <- split(seq_len(length(group_id_ord)), group_id_ord)
 
-  # --- 2. Setup Priors and Initial Values ---
+  # --- 2. Setup Priors  ---
   b0 <- if(is.null(prior_mean)) rep(0, p) else prior_mean
   V0_inv <- as.matrix(Matrix::Diagonal(x = rep(1 / prior_var, p)))
 
-  beta   <- rep(0, p)
-  u      <- rep(0, n_groups)
-  sigma2 <- 1.0
-  omega  <- numeric(n)
+  # --- Initialization ---
+  init <- validate_init(
+    init = init,
+    p = p,
+    has_frailty = TRUE,
+    n_groups = n_groups
+  )
+
+  beta_supplied <-
+    !is.null(init) && !is.null(init$beta)
+
+  frailty_supplied <-
+    !is.null(init) && !is.null(init$frailty)
+
+  frailty_var_supplied <-
+    !is.null(init) && !is.null(init$frailty_var)
+
+  # beta
+  if (beta_supplied) {
+    beta_init_original <- as.numeric(init$beta)
+  } else {
+    beta_init_original <- rep(0, p)
+  }
+  names(beta_init_original) <- colnames(X)
+
+  beta_init_internal <- transform_initial_beta(
+    beta = beta_init_original,
+    standardization = std_info
+  )
+  names(beta_init_internal) <- colnames(X)
+
+  # frailty
+  if (frailty_supplied) {
+    u_init <- as.numeric(init$frailty)
+  } else {
+    u_init <- rep(0, n_groups)
+  }
+  names(u_init) <- group_levels
+
+  # frailty variance
+  if (frailty_var_supplied) {
+    sigma2_init <- as.numeric(init$frailty_var)
+  } else {
+    sigma2_init <- 1.0
+  }
+
+  beta <- beta_init_internal
+  u <- u_init
+  sigma2 <- sigma2_init
+
+  initial_values <- list(
+    original = list(
+      beta = beta_init_original,
+      frailty = u_init,
+      frailty_var = sigma2_init
+    ),
+    internal = list(
+      beta = beta_init_internal,
+      frailty = u_init,
+      frailty_var = sigma2_init
+    ),
+    supplied = list(
+      beta = beta_supplied,
+      frailty = frailty_supplied,
+      frailty_var = frailty_var_supplied
+    )
+  )
 
   # Storage
   n_save <- floor((n_iter - burn) / thin)
-  beta_draws   <- matrix(0, n_save, p)
-  u_draws      <- matrix(0, n_save, n_groups)
+  beta_draws <- matrix(0, nrow = n_save, ncol = p)
+  u_draws <- matrix(0, nrow = n_save, ncol = n_groups)
   sigma2_draws <- numeric(n_save)
+  colnames(beta_draws) <- colnames(X_ord)
+  colnames(u_draws) <- group_levels
 
   # --- 3. Gibbs Sampler ---
   for (it in 1:n_iter) {
@@ -286,20 +364,17 @@ gplcox_frailty_fit <- function(formula, data,
     }
   }
 
-  if (standardize) {
-    for (j in 2:ncol(X)) {
-      beta_draws[, j] <- beta_draws[, j] / sd[j-1]
-    }
-    intercept_adjustment <- rowSums(sweep(beta_draws[, -1, drop=FALSE], 2, mu, "*"))
-    beta_draws[, 1] <- beta_draws[, 1] - intercept_adjustment
-  }
+  beta_draws <- backtransform_beta(
+    beta_draws = beta_draws,
+    standardization = std_info
+  )
 
   return(list(
     beta         = beta_draws,
     u            = u_draws,
     sigma2       = sigma2_draws,
     colnames     = colnames(X_ord),
-    group_levels = levels(group_factor),
+    group_levels = group_levels,
     time         = dat$time,
     status       = dat$status,
     X            = dat$X,
@@ -307,7 +382,8 @@ gplcox_frailty_fit <- function(formula, data,
     R_sets       = dat$R_sets,
     E_sets       = dat$E_sets,
     d_obs        = sapply(dat$E_sets, length),
-    group_id_ord = group_id_ord
+    group_id_ord = group_id_ord,
+    initial_values = initial_values
   ))
 }
 
@@ -328,6 +404,12 @@ gplcox_frailty_fit <- function(formula, data,
 #' @param burn Number of burn-in iterations.
 #' @param thin Thinning interval.
 #' @param standardize Logical; standardize covariates except the intercept.
+#' @param init Initial values for the MCMC sampler. For multiple chains,
+#'   a list of chain-specific initial-value lists may be supplied.
+#' @param chains Number of MCMC chains. Default is 1.
+#' @param seed Optional random seed for reproducible MCMC sampling.
+#' @param parallel Logical; whether multiple chains should be run in parallel.
+#' @param cores Number of CPU cores used when \code{parallel = TRUE}.
 #' @param verbose Logical; print progress messages?
 #'
 #' @return An object of class `"gplcox"`.
@@ -347,22 +429,65 @@ gplcox <- function(formula, data,
                    n_iter = 4000, burn = 2000, thin = 1,
                    prior_mean = NULL, prior_var = 100,
                    a_sig = 0.01, b_sig = 0.01,
-                   standardize = FALSE,
+                   standardize = TRUE,
+                   init = NULL,
+                   chains = 1L,
+                   seed = NULL,
+                   parallel = FALSE,
+                   cores = 1L,
                    verbose = FALSE) {
   has_frailty <- any(grepl("\\|", format(formula)))
 
   if (has_frailty) {
-    res <- gplcox_frailty_fit(formula, data,
-                              prior_mean, prior_var, a_sig, b_sig,
-                              n_iter, burn, thin, standardize,
-                              verbose)
+    fit_fun <- "gplcox_frailty_fit"
+
+    fit_args <- list(
+      formula = formula,
+      data = data,
+      prior_mean = prior_mean,
+      prior_var = prior_var,
+      a_sig = a_sig,
+      b_sig = b_sig,
+      n_iter = n_iter,
+      burn = burn,
+      thin = thin,
+      standardize = standardize,
+      verbose = verbose
+    )
   } else {
-    res <- gplcox_fixed_fit(formula, data,
-                            prior_mean, prior_var,
-                            n_iter, burn, thin, standardize,
-                            verbose)
+    fit_fun <- "gplcox_fixed_fit"
+
+    fit_args <- list(
+      formula = formula,
+      data = data,
+      prior_mean = prior_mean,
+      prior_var = prior_var,
+      n_iter = n_iter,
+      burn = burn,
+      thin = thin,
+      standardize = standardize,
+      verbose = verbose
+    )
   }
 
+  # Run MCMC chains
+  chain_run <- run_mcmc_chains(
+    fit_fun_name = fit_fun,
+    fit_args = fit_args,
+    chains = chains,
+    parallel = parallel,
+    cores = cores,
+    init = init,
+    seed = seed
+  )
+
+  # Combine chains
+  res <- combine_mcmc_chains(
+    chain_run = chain_run,
+    has_frailty = has_frailty
+  )
+
+  # Model information
   res$method <- "GPL-Cox"
   res$has_frailty <- has_frailty
   res$call <- match.call()
@@ -371,9 +496,7 @@ gplcox <- function(formula, data,
   res$burn <- burn
   res$thin <- thin
   res$standardize <- standardize
-  res$n_save <- nrow(res$beta)
-  res$n_par  <- ncol(res$beta)
 
   class(res) <- c("gplcox", "bayescoxrank")
-  return(res)
-}
+
+  return(res)}

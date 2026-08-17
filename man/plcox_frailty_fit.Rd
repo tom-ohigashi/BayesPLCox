@@ -15,7 +15,8 @@ plcox_frailty_fit(
   n_iter = 2000,
   burn = 1000,
   thin = 1,
-  standardize = FALSE,
+  standardize = TRUE,
+  init = NULL,
   verbose = FALSE
 )
 }

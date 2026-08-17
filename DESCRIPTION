@@ -1,6 +1,6 @@
 Package: BayesPLCox
 Title: Bayesian Inference for Cox Models via PL and GPL Likelihoods
-Version: 0.0.2
+Version: 0.1.0
 Authors@R: c(
     person(
       "Tomohiro", "Ohigashi",
@@ -8,11 +8,15 @@ Authors@R: c(
       role = c("aut", "cre")
     )
   )
-Description: Bayesian inference for Cox regression models based on 
-    Plackett-Luce (PL) and generalized/geometric Plackett-Luce (GPL) likelihood formulations. 
-    The acronym 'PL' reflects a dual interpretation: the classical Cox partial 
-    likelihood and the Plackett-Luce model for rank-ordered data, which are 
-    connected through a unified probabilistic framework.
+Description: Bayesian inference for Cox regression models based on
+    Plackett-Luce (PL) and generalized/geometric Plackett-Luce (GPL)
+    likelihood formulations. The acronym 'PL' reflects a dual interpretation:
+    the classical Cox partial likelihood and the Plackett-Luce model for
+    rank-ordered data, which are connected through a unified probabilistic
+    framework. Posterior computation is performed using Gibbs sampling.
+    The package supports fixed-effects and shared-frailty models, user-specified
+    initial values, reproducible multiple-chain sampling, optional parallel
+    chain execution, convergence diagnostics, and chain-specific trace plots.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -23,7 +27,8 @@ Imports:
     Matrix,
     MASS,
     lme4,
-    rlang
+    rlang,
+    posterior
 Suggests:
     ggplot2,
     bayesplot,

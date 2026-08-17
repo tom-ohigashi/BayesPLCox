@@ -12,7 +12,15 @@
 #'
 #' @keywords internal
 .keep_terms <- function(beta, colnames, intercept = FALSE) {
-  if (is.null(colnames)) return(beta)
+
+  if (is.null(colnames)) {
+    return(
+      list(
+        beta = beta,
+        colnames = colnames
+      )
+    )
+  }
 
   if (!intercept) {
     keep <- colnames != "(Intercept)"
@@ -20,7 +28,10 @@
     colnames <- colnames[keep]
   }
 
-  list(beta = beta, colnames = colnames)
+  list(
+    beta = beta,
+    colnames = colnames
+  )
 }
 
 #' Summarize posterior samples for plotting
@@ -67,54 +78,441 @@
   out
 }
 
+#' Resolve Regression Parameters for Trace Plots
+#'
+#' Internal helper function used to determine which regression
+#' coefficients should be included in a trace plot.
+#'
+#' @param x A fitted BayesPLCox model object.
+#' @param pars Regression coefficients to plot. Can be \code{NULL},
+#'   numeric indices, or character parameter names.
+#' @param intercept Logical; should the intercept be included when
+#'   \code{pars = NULL}?
+#'
+#' @return A list containing selected column indices and parameter names.
+#'
+#' @keywords internal
+.resolve_trace_pars <- function(x,
+                                pars = NULL,
+                                intercept = FALSE) {
+
+  if (is.null(x$beta) || !is.matrix(x$beta)) {
+    stop("`x$beta` must be a posterior sample matrix.")
+  }
+
+  p <- ncol(x$beta)
+
+  parnames <- colnames(x$beta)
+
+  if (is.null(parnames)) {
+    parnames <- x$colnames
+  }
+
+  if (is.null(parnames)) {
+    parnames <- paste0(
+      "beta[",
+      seq_len(p),
+      "]"
+    )
+  }
+
+  if (length(parnames) != p) {
+    stop(
+      "The number of parameter names does not match ",
+      "the number of columns in `x$beta`."
+    )
+  }
+
+  # Default: retain all regression coefficients,
+  # optionally excluding the intercept.
+  if (is.null(pars)) {
+
+    idx <- seq_len(p)
+
+    if (!isTRUE(intercept)) {
+      idx <- idx[
+        parnames[idx] != "(Intercept)"
+      ]
+    }
+
+  } else if (is.numeric(pars)) {
+
+    if (length(pars) == 0L ||
+        any(!is.finite(pars)) ||
+        any(pars != floor(pars)) ||
+        any(pars < 1L) ||
+        any(pars > p)) {
+      stop(
+        "Numeric `pars` must contain valid coefficient indices."
+      )
+    }
+
+    idx <- as.integer(pars)
+
+  } else if (is.character(pars)) {
+
+    unknown <- setdiff(
+      pars,
+      parnames
+    )
+
+    if (length(unknown) > 0L) {
+      stop(
+        "Unknown parameter(s) in `pars`: ",
+        paste(unknown, collapse = ", "),
+        "."
+      )
+    }
+
+    idx <- match(
+      pars,
+      parnames
+    )
+
+  } else {
+
+    stop(
+      "`pars` must be NULL, numeric indices, ",
+      "or character parameter names."
+    )
+  }
+
+  if (length(idx) == 0L) {
+    stop(
+      "No regression coefficients were selected for plotting."
+    )
+  }
+
+  list(
+    index = idx,
+    names = parnames[idx]
+  )
+}
+
+
+#' Resolve Frailty Parameters for Trace Plots
+#'
+#' Internal helper function used to determine which individual
+#' frailty effects should be included in a trace plot.
+#'
+#' @param x A fitted BayesPLCox frailty model object.
+#' @param frailty Frailty effects to plot. Can be \code{NULL},
+#'   numeric indices, or character names.
+#'
+#' @return A list containing selected column indices and frailty names.
+#'   If \code{frailty = NULL}, an empty selection is returned.
+#'
+#' @keywords internal
+.resolve_trace_frailty <- function(x,
+                                   frailty = NULL) {
+
+  if (is.null(frailty)) {
+    return(
+      list(
+        index = integer(0),
+        names = character(0)
+      )
+    )
+  }
+
+  if (!isTRUE(x$has_frailty) ||
+      is.null(x$u) ||
+      !is.matrix(x$u)) {
+    stop(
+      "`frailty` can only be specified for a fitted frailty model."
+    )
+  }
+
+  G <- ncol(x$u)
+
+  frailty_names <- colnames(x$u)
+
+  if (is.null(frailty_names) &&
+      !is.null(x$group_levels) &&
+      length(x$group_levels) == G) {
+
+    frailty_names <- as.character(
+      x$group_levels
+    )
+  }
+
+  if (is.null(frailty_names)) {
+    frailty_names <- paste0(
+      "frailty[",
+      seq_len(G),
+      "]"
+    )
+  }
+
+  if (is.numeric(frailty)) {
+
+    if (length(frailty) == 0L ||
+        any(!is.finite(frailty)) ||
+        any(frailty != floor(frailty)) ||
+        any(frailty < 1L) ||
+        any(frailty > G)) {
+      stop(
+        "Numeric `frailty` must contain valid frailty indices."
+      )
+    }
+
+    idx <- as.integer(frailty)
+
+  } else if (is.character(frailty)) {
+
+    unknown <- setdiff(
+      frailty,
+      frailty_names
+    )
+
+    if (length(unknown) > 0L) {
+      stop(
+        "Unknown frailty effect(s): ",
+        paste(unknown, collapse = ", "),
+        "."
+      )
+    }
+
+    idx <- match(
+      frailty,
+      frailty_names
+    )
+
+  } else {
+
+    stop(
+      "`frailty` must be NULL, numeric indices, ",
+      "or character frailty names."
+    )
+  }
+
+  list(
+    index = idx,
+    names = frailty_names[idx]
+  )
+}
+
+
 #' Internal trace plot engine for Bayesian Cox models
 #'
-#' Internal helper function that generates trace plots of posterior draws
-#' for regression coefficients and, when present, frailty variance parameters.
+#' Internal helper function that generates chain-specific trace plots
+#' of posterior draws for regression coefficients and, when present,
+#' frailty variance parameters and selected individual frailty effects.
 #' This function is shared by both `"plcox"` and `"gplcox"` methods.
 #'
 #' @param x A fitted model object containing posterior samples.
-#' @param intercept Logical; include the intercept term in the trace plot?
+#' @param intercept Logical; include the intercept term in the trace plot
+#'   when \code{pars = NULL}?
+#' @param pars Regression coefficients to plot. Can be \code{NULL},
+#'   numeric indices, or character parameter names.
+#' @param include_frailty_var Logical; include the frailty variance
+#'   parameter when a frailty model is fitted?
+#' @param frailty Optional individual frailty effects to plot. Can be
+#'   \code{NULL}, numeric indices, or character names.
+#' @param ncol Number of columns used for parameter facets.
 #' @param ... Further arguments, currently ignored.
 #'
-#' @return A plot object (typically a `ggplot2` or `patchwork` object).
+#' @return A \code{ggplot2} object or a \code{patchwork} object.
 #'
 #' @keywords internal
-.traceplot_bayescox <- function(x, intercept = FALSE, ...) {
+.traceplot_bayescox <- function(
+    x,
+    intercept = FALSE,
+    pars = NULL,
+    include_frailty_var = TRUE,
+    frailty = NULL,
+    ncol = 1L,
+    ...) {
+
   if (!requireNamespace("bayesplot", quietly = TRUE) ||
-      !requireNamespace("ggplot2", quietly = TRUE) ||
-      !requireNamespace("patchwork", quietly = TRUE)) {
-    stop("Please install 'bayesplot', 'ggplot2', and 'patchwork' to use this function.")
+      !requireNamespace("ggplot2", quietly = TRUE)) {
+    stop(
+      "Please install 'bayesplot' and 'ggplot2' ",
+      "to use this function."
+    )
   }
 
   if (is.null(x$beta) || !is.matrix(x$beta)) {
-    stop("x$beta must be a posterior sample matrix.")
+    stop(
+      "`x$beta` must be a posterior sample matrix."
+    )
   }
 
-  beta <- x$beta
-  parnames <- colnames(beta)
-  if (is.null(parnames)) parnames <- x$colnames
+  # --------------------------------------------------
+  # Chain information
+  # --------------------------------------------------
 
-  tmp <- .keep_terms(beta, parnames, intercept = intercept)
-  beta <- tmp$beta
-  parnames <- tmp$colnames
+  if (is.null(x$chain_id)) {
 
-  colnames(beta) <- parnames
+    # Backward compatibility for fitted objects created
+    # before multiple-chain support was introduced.
+    chain_id <- rep(
+      1L,
+      nrow(x$beta)
+    )
 
-  p1 <- bayesplot::mcmc_trace(beta) +
-    ggplot2::ggtitle(expression("Trace plots: Fixed effects (" * beta * ")"))
-
-  if (!is.null(x$sigma2)) {
-    draws_sig2 <- matrix(x$sigma2, ncol = 1)
-    colnames(draws_sig2) <- "sigma2"
-
-    p2 <- bayesplot::mcmc_trace(draws_sig2) +
-      ggplot2::ggtitle(expression("Trace plot: Frailty variance (" * sigma^2 * ")"))
-
-    return(p1 / p2)
   } else {
-    return(p1)
+
+    chain_id <- x$chain_id
   }
+
+  if (length(chain_id) != nrow(x$beta)) {
+    stop(
+      "The length of `x$chain_id` must match ",
+      "the number of rows in `x$beta`."
+    )
+  }
+
+  if (!is.numeric(ncol) ||
+      length(ncol) != 1L ||
+      !is.finite(ncol) ||
+      ncol < 1 ||
+      ncol != floor(ncol)) {
+    stop(
+      "`ncol` must be a positive integer."
+    )
+  }
+
+  ncol <- as.integer(ncol)
+
+  # --------------------------------------------------
+  # Regression coefficients
+  # --------------------------------------------------
+
+  beta_sel <- .resolve_trace_pars(
+    x = x,
+    pars = pars,
+    intercept = intercept
+  )
+
+  beta <- x$beta[
+    ,
+    beta_sel$index,
+    drop = FALSE
+  ]
+
+  colnames(beta) <- beta_sel$names
+
+  beta_array <- as_chain_draws_array(
+    draws = beta,
+    chain_id = chain_id,
+    variable_names = beta_sel$names
+  )
+
+  p_beta <- bayesplot::mcmc_trace(
+    beta_array,
+    facet_args = list(
+      ncol = ncol
+    )
+  ) +
+    ggplot2::ggtitle(
+      expression(
+        "Trace plots: Fixed effects (" * beta * ")"
+      )
+    )
+
+  plots <- list(
+    p_beta
+  )
+
+  # --------------------------------------------------
+  # Frailty variance
+  # --------------------------------------------------
+
+  if (isTRUE(include_frailty_var) &&
+      isTRUE(x$has_frailty) &&
+      !is.null(x$sigma2)) {
+
+    if (length(x$sigma2) != length(chain_id)) {
+      stop(
+        "The number of frailty-variance draws is inconsistent ",
+        "with `x$chain_id`."
+      )
+    }
+
+    sig2_array <- as_chain_draws_array(
+      draws = x$sigma2,
+      chain_id = chain_id,
+      variable_names = "sigma2"
+    )
+
+    p_sig2 <- bayesplot::mcmc_trace(
+      sig2_array
+    ) +
+      ggplot2::ggtitle(
+        expression(
+          "Trace plot: Frailty variance (" * sigma^2 * ")"
+        )
+      )
+
+    plots[[length(plots) + 1L]] <- p_sig2
+  }
+
+  # --------------------------------------------------
+  # Individual frailty effects
+  # --------------------------------------------------
+
+  frailty_sel <- .resolve_trace_frailty(
+    x = x,
+    frailty = frailty
+  )
+
+  if (length(frailty_sel$index) > 0L) {
+
+    if (nrow(x$u) != length(chain_id)) {
+      stop(
+        "The number of frailty draws is inconsistent ",
+        "with `x$chain_id`."
+      )
+    }
+
+    u_draws <- x$u[
+      ,
+      frailty_sel$index,
+      drop = FALSE
+    ]
+
+    colnames(u_draws) <- frailty_sel$names
+
+    u_array <- as_chain_draws_array(
+      draws = u_draws,
+      chain_id = chain_id,
+      variable_names = frailty_sel$names
+    )
+
+    p_u <- bayesplot::mcmc_trace(
+      u_array,
+      facet_args = list(
+        ncol = ncol
+      )
+    ) +
+      ggplot2::ggtitle(
+        "Trace plots: Frailty effects"
+      )
+
+    plots[[length(plots) + 1L]] <- p_u
+  }
+
+  # --------------------------------------------------
+  # Return plot
+  # --------------------------------------------------
+
+  if (length(plots) == 1L) {
+    return(
+      plots[[1L]]
+    )
+  }
+
+  if (!requireNamespace("patchwork", quietly = TRUE)) {
+    stop(
+      "Please install 'patchwork' to combine multiple trace plots."
+    )
+  }
+
+  patchwork::wrap_plots(
+    plots,
+    ncol = 1L
+  )
 }
 
 #' Internal posterior interval plot engine for Bayesian Cox models

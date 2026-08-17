@@ -29,42 +29,141 @@ print.gplcox <- function(x, ...) {
 #'
 #' @return An object of class `"summary.gplcox"`.
 #' @export
-summary.gplcox <- function(object, level = 0.95, ...) {
-  beta_draws <- object$beta
-  beta_mean  <- colMeans(beta_draws)
-  beta_sd    <- apply(beta_draws, 2, sd)
-  beta_ci    <- apply(beta_draws, 2, quantile, probs = c(0.025, 0.975))
+summary.gplcox <- function(object,
+                          level = 0.95,
+                          ...) {
 
-  if (requireNamespace("coda", quietly = TRUE)) {
-    beta_ess <- coda::effectiveSize(coda::as.mcmc(beta_draws))
-  } else {
-    beta_ess <- rep(NA, length(beta_mean))
+  ci_info <- credible_interval_info(level)
+
+  beta_draws <- object$beta
+  beta_names <- colnames(beta_draws)
+
+  if (is.null(beta_names)) {
+    beta_names <- object$colnames
   }
+
+  if (is.null(beta_names)) {
+    beta_names <- paste0("beta[", seq_len(ncol(beta_draws)), "]")
+  }
+
+  if (length(beta_names) != ncol(beta_draws)) {
+    stop(
+      "The number of coefficient names does not match ",
+      "the number of columns in `object$beta`."
+    )
+  }
+
+  colnames(beta_draws) <- beta_names
+
+  # --------------------------------
+  # Posterior summaries
+  # --------------------------------
+
+  beta_mean <- colMeans(beta_draws)
+
+  beta_sd <- apply(
+    beta_draws,
+    2,
+    stats::sd
+  )
+
+  beta_ci <- apply(
+    beta_draws,
+    2,
+    stats::quantile,
+    probs = ci_info$probs,
+    names = FALSE
+  )
+
+  # --------------------------------
+  # MCMC diagnostics
+  # --------------------------------
+
+  beta_diag <- compute_mcmc_diagnostics(
+    draws = beta_draws,
+    chain_id = object$chain_id,
+    variable_names = colnames(beta_draws)
+  )
+
+  # --------------------------------
+  # Coefficient table
+  # --------------------------------
 
   coef_table <- data.frame(
     Post.Mean = beta_mean,
-    Post.SD   = beta_sd,
-    `Lower 95%` = beta_ci[1, ],
-    `Upper 95%` = beta_ci[2, ],
+    Post.SD = beta_sd,
+    Lower = beta_ci[1, ],
+    Upper = beta_ci[2, ],
     `Exp(Mean)` = exp(beta_mean),
-    ESS       = beta_ess,
+    Rhat = beta_diag$Rhat,
+    `Bulk ESS` = beta_diag$`Bulk ESS`,
+    `Tail ESS` = beta_diag$`Tail ESS`,
+    MCSE = beta_diag$MCSE,
     check.names = FALSE
   )
-  rownames(coef_table) <- object$colnames
+
+  names(coef_table)[3:4] <- c(
+    ci_info$lower_name,
+    ci_info$upper_name
+  )
+
+  rownames(coef_table) <- colnames(beta_draws)
 
   frailty_stat <- NULL
-  if (object$has_frailty) {
+  has_frailty <- object$has_frailty
+
+  if (has_frailty) {
+
+    sig2_draws <- object$sigma2
+
+    sig2_ci <- stats::quantile(
+      sig2_draws,
+      probs = ci_info$probs,
+      names = FALSE
+    )
+
+    sig2_diag <- compute_mcmc_diagnostics(
+      draws = sig2_draws,
+      chain_id = object$chain_id,
+      variable_names = "frailty_var"
+    )
+
+    sigma2_summary <- data.frame(
+      Post.Mean = mean(sig2_draws),
+      Post.SD = stats::sd(sig2_draws),
+      Lower = sig2_ci[1],
+      Upper = sig2_ci[2],
+      Rhat = sig2_diag$Rhat,
+      `Bulk ESS` = sig2_diag$`Bulk ESS`,
+      `Tail ESS` = sig2_diag$`Tail ESS`,
+      MCSE = sig2_diag$MCSE,
+      check.names = FALSE
+    )
+
+    names(sigma2_summary)[3:4] <- c(
+      ci_info$lower_name,
+      ci_info$upper_name
+    )
+
+    rownames(sigma2_summary) <- "frailty_var"
+
     frailty_stat <- list(
-      sigma2 = c(Mean = mean(object$sigma2), SD = sd(object$sigma2),
-                 quantile(object$sigma2, c(0.025, 0.975))),
+      sigma2 = sigma2_summary,
       n_groups = length(object$group_levels)
     )
   }
 
-  res <- list(coefficients = coef_table, frailty = frailty_stat,
-              has_frailty = object$has_frailty, method = object$method)
+  res <- list(
+    coefficients = coef_table,
+    frailty = frailty_stat,
+    has_frailty = has_frailty,
+    level = level,
+    n_chains = object$n_chains
+  )
+
   class(res) <- "summary.gplcox"
-  return(res)
+
+  res
 }
 
 #' Print a summary of a GPL-Cox model
@@ -116,17 +215,49 @@ confint.gplcox <- function(object, parm, level = 0.95, ...) {
 
 #' Trace plots for a fitted GPL-Cox model
 #'
-#' Produces trace plots of posterior draws for regression coefficients and, when
-#' present, frailty variance parameters.
+#' Produces chain-specific trace plots of posterior draws for regression
+#' coefficients and, when present, frailty variance parameters and selected
+#' individual frailty effects.
+#'
+#' For models fitted with multiple MCMC chains, each chain is displayed
+#' separately in the trace plot.
 #'
 #' @param x An object of class `"gplcox"`.
-#' @param intercept Logical; include the intercept in the trace plot?
-#' @param ... Further arguments, currently ignored.
+#' @param intercept Logical; include the intercept in the trace plot when
+#'   \code{pars = NULL}?
+#' @param pars Regression coefficients to plot. Can be \code{NULL},
+#'   numeric indices, or character parameter names. If \code{NULL},
+#'   all regression coefficients are plotted, subject to
+#'   \code{intercept}.
+#' @param include_frailty_var Logical; include the frailty variance
+#'   parameter when a frailty model is fitted?
+#' @param frailty Optional individual frailty effects to plot. Can be
+#'   \code{NULL}, numeric indices, or character names.
+#' @param ncol Number of columns used for parameter facets.
+#' @param ... Further arguments reserved for future use.
 #'
-#' @return A plot object.
+#' @return A \code{ggplot2} object or, when multiple plot components are
+#'   produced, a \code{patchwork} object.
+#'
 #' @export
-traceplot.gplcox <- function(x, intercept = FALSE, ...) {
-  .traceplot_bayescox(x, intercept = intercept, ...)
+traceplot.gplcox <- function(
+    x,
+    intercept = FALSE,
+    pars = NULL,
+    include_frailty_var = FALSE,
+    frailty = NULL,
+    ncol = 1L,
+    ...) {
+
+  .traceplot_bayescox(
+    x = x,
+    intercept = intercept,
+    pars = pars,
+    include_frailty_var = include_frailty_var,
+    frailty = frailty,
+    ncol = ncol,
+    ...
+  )
 }
 
 #' Posterior interval plot for a fitted GPL-Cox model

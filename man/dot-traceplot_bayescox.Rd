@@ -4,21 +4,42 @@
 \alias{.traceplot_bayescox}
 \title{Internal trace plot engine for Bayesian Cox models}
 \usage{
-.traceplot_bayescox(x, intercept = FALSE, ...)
+.traceplot_bayescox(
+  x,
+  intercept = FALSE,
+  pars = NULL,
+  include_frailty_var = TRUE,
+  frailty = NULL,
+  ncol = 1L,
+  ...
+)
 }
 \arguments{
 \item{x}{A fitted model object containing posterior samples.}
 
-\item{intercept}{Logical; include the intercept term in the trace plot?}
+\item{intercept}{Logical; include the intercept term in the trace plot
+when \code{pars = NULL}?}
+
+\item{pars}{Regression coefficients to plot. Can be \code{NULL},
+numeric indices, or character parameter names.}
+
+\item{include_frailty_var}{Logical; include the frailty variance
+parameter when a frailty model is fitted?}
+
+\item{frailty}{Optional individual frailty effects to plot. Can be
+\code{NULL}, numeric indices, or character names.}
+
+\item{ncol}{Number of columns used for parameter facets.}
 
 \item{...}{Further arguments, currently ignored.}
 }
 \value{
-A plot object (typically a \code{ggplot2} or \code{patchwork} object).
+A \code{ggplot2} object or a \code{patchwork} object.
 }
 \description{
-Internal helper function that generates trace plots of posterior draws
-for regression coefficients and, when present, frailty variance parameters.
+Internal helper function that generates chain-specific trace plots
+of posterior draws for regression coefficients and, when present,
+frailty variance parameters and selected individual frailty effects.
 This function is shared by both \code{"plcox"} and \code{"gplcox"} methods.
 }
 \keyword{internal}

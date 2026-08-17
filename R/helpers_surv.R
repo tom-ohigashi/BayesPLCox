@@ -389,3 +389,4 @@ dic_from_draws <- function(beta_draws, time, event, X,
     deviance = dev
   )
 }
+

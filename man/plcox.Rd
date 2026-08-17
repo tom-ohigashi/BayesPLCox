@@ -15,7 +15,12 @@ plcox(
   n_iter = 2000,
   burn = 1000,
   thin = 1,
-  standardize = FALSE,
+  standardize = TRUE,
+  init = NULL,
+  chains = 1L,
+  seed = NULL,
+  parallel = FALSE,
+  cores = 1L,
   verbose = FALSE
 )
 }
@@ -40,6 +45,17 @@ plcox(
 \item{thin}{Thinning interval.}
 
 \item{standardize}{Logical; standardize covariates except the intercept.}
+
+\item{init}{Initial values for the MCMC sampler. For multiple chains,
+a list of chain-specific initial-value lists may be supplied.}
+
+\item{chains}{Number of MCMC chains. Default is 1.}
+
+\item{seed}{Optional random seed for reproducible MCMC sampling.}
+
+\item{parallel}{Logical; whether multiple chains should be run in parallel.}
+
+\item{cores}{Number of CPU cores used when \code{parallel = TRUE}.}
 
 \item{verbose}{Logical; print progress messages?}
 }
